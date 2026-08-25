@@ -59,6 +59,18 @@ async def get_notes_title():
     return row
 
 
+async def get_notes_titles_and_numbers():
+    """Функция для получения заголовков и note_number
+
+    Returns:
+        tuple: [(title, note_number), ..]
+    """
+    async with aiosqlite.connect('kb_adminbot.db') as db:
+        cursor = await db.execute("SELECT Title, Note_number FROM notes")
+        rows = await cursor.fetchall()
+    return rows
+
+
 async def get_notes_text(num):
     async with aiosqlite.connect('kb_adminbot.db') as db:
         cursor = await db.execute("SELECT Text FROM notes WHERE Note_number =?",
@@ -131,7 +143,7 @@ async def command_add_notes(callback: types.CallbackQuery, state: FSMContext):
 
 
 @dp.message(Addnotes.one)
-async def capcha(message: types.Message, state: FSMContext):
+async def add_notes_1(message: types.Message, state: FSMContext):
     title = message.text
     await state.update_data(title=title)
     await message.answer('введите текст')
@@ -139,7 +151,7 @@ async def capcha(message: types.Message, state: FSMContext):
 
 
 @dp.message(Addnotes.two)
-async def capcha(message: types.Message, state: FSMContext):
+async def add_notes_2(message: types.Message, state: FSMContext):
     text = message.text
     await state.update_data(text=text)
     await message.answer('документ, если нет то -')
@@ -149,19 +161,19 @@ async def capcha(message: types.Message, state: FSMContext):
 
 
 @dp.message(Addnotes.three)
-async def capcha(message: types.Message, state: FSMContext):
+async def add_notes_final(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    documentid = None
-    if message.text != '-':
-        documentid = message.document.file_id
-    async with aiosqlite.connect('kb_adminbot.db') as db:
-        cursor = await db.execute('SELECT Note_number FROM notes')
-        notes = await cursor.fetchall()
-        lennotes = len(notes)
 
-        await db.execute("INSERT into Notes (Note_number, Title, Text, Document, Course) VALUES (?, ?, ?, ?, ?)",
-                         (lennotes, data['title'], data['text'], documentid, data['course']))
+    documentid = message.document.file_id if message.document else None
+
+    async with aiosqlite.connect('kb_adminbot.db') as db:
+        await db.execute(
+            "INSERT INTO Notes (Title, Text, Document, Course) VALUES (?, ?, ?, ?)",
+            (data['title'], data['text'], documentid, data['course'])
+        )
         await db.commit()
+
+    await message.answer("заметка успешно создана!")
     await state.clear()
 
 
@@ -169,11 +181,17 @@ async def capcha(message: types.Message, state: FSMContext):
 #удаление заметки
 @dp.callback_query(F.data=='notedel')
 async def command_edit_notes(callback: types.CallbackQuery):
-    title = await get_notes_title()
+    notes = await get_notes_titles_and_numbers()
+    if not notes:
+        callback.message.edit_text("Удалять пока что нечего")
+        return
+    
     buttons = []
-    for i in range(len(title)):
-        button=[InlineKeyboardButton(text=title[i], callback_data=f'1notedel_{i}')]
+
+    for title, note_number in notes:
+        button=[InlineKeyboardButton(text=title, callback_data=f'1notedel_{note_number}')]
         buttons.append(button)
+        
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback.message.edit_text('выберите заметку', reply_markup=keyboard)
 
@@ -191,14 +209,21 @@ async def command_delete_notes(callback: types.CallbackQuery):
 
 
 
-#едактирование заметки выбор заметки
+# редактирование заметки выбор заметки
 @dp.callback_query(F.data=='note_edit')
 async def command_edit_notes(callback: types.CallbackQuery):
-    title = await get_notes_title()
+    notes = await get_notes_titles_and_numbers()
+
+    if not notes:
+        await callback.message.edit_text("заметок пока нет")
+        return
+
     buttons = []
-    for i in range(len(title)):
-        button=[InlineKeyboardButton(text=title[i], callback_data=f'notenum_{i}')]
+
+    for title, note_number in notes:
+        button=[InlineKeyboardButton(text=title, callback_data=f'notenum_{note_number}')]
         buttons.append(button)
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback.message.edit_text('выберите заметку', reply_markup=keyboard)
 
@@ -272,13 +297,20 @@ async def red_text(message: types.Message, state: FSMContext):
 
 @dp.message(Noteredaction.document)
 async def red_document(message: types.Message, state: FSMContext):
+    if not message.document:
+        await message.answer('нужно прислать файл (документ)')
+        return
+    
     documentid = message.document.file_id
     data = await state.get_data()
     notenum = data['notenum']
+
     async with aiosqlite.connect('kb_adminbot.db') as db:
         await db.execute("UPDATE Notes SET Document = ? WHERE Note_number = ?",
                          (documentid, notenum))
         await db.commit()
+
+    await message.answer("документ обновлен! ")
     await state.clear()
 
 

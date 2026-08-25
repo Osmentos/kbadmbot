@@ -18,7 +18,7 @@ async def create_database(db_path: str = DB_PATH) -> None:
 
         await db.execute("""
                     CREATE TABLE IF NOT EXISTS Notes (
-                        Note_number INTEGER PRIMARY KEY,
+                        Note_number INTEGER PRIMARY KEY AUTOINCREMENT,
                         Title TEXT,
                         Text TEXT,
                         Document TEXT,
