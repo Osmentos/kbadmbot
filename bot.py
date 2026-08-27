@@ -319,6 +319,16 @@ async def red_document(message: types.Message, state: FSMContext):
 @dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
 async def user_joined(event: types.ChatMemberUpdated, bot: Bot):
     new_user = event.new_chat_member.user
+
+    added_by = event.from_user
+    if added_by:
+        admins = await get_admins()
+        if added_by.id in admins:
+            await bot.send_message(
+                chat_id=event.chat.id,
+                text=f"Привет, {new_user.first_name}! Добро пожаловать в наш чат!")
+            return
+
     key = StorageKey(bot_id=bot.id, chat_id=event.chat.id, user_id=new_user.id)
     state = FSMContext(storage=dp.storage, key=key)
     num1 = random.randint(1,10)
