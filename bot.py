@@ -12,7 +12,7 @@ import logging
 import aiosqlite
 from db_creation import create_database
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.filters.command import Command
+from aiogram.filters.command import Command, CommandObject
 
 
 load_dotenv()
@@ -115,6 +115,29 @@ async def cmd_start(message: types.Message):
     else:
         await message.answer(f"Привет, {message.from_user.first_name}! Добро пожаловать!")
 
+
+
+@dp.message(Command('add_admin'))
+async def add_admin(message: types.Message, command: CommandObject):
+    admins = await get_admins()
+    if message.from_user.id not in admins:
+        return
+
+    if not command.args:
+        await message.answer('usage: /add_admin <tg_id>')
+        return
+
+    try:
+        new_admin_id = int(command.args.strip())
+    except ValueError:
+        await message.answer("tg_id isn't number")
+        return
+
+    async with aiosqlite.connect('kb_adminbot.db') as db:
+        await db.execute("INSERT OR IGNORE INTO Admins (Tg_id) VALUES (?)", (new_admin_id,))
+        await db.commit()
+
+    await message.answer(f'+, {new_admin_id} now admin')
 
 
 
