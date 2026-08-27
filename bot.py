@@ -1,4 +1,5 @@
 import asyncio
+import html
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.filters import CommandStart, ChatMemberUpdatedFilter
@@ -16,6 +17,7 @@ from aiogram.filters.command import Command, CommandObject
 
 
 load_dotenv()
+CAPTCHA_DELAY = 60 * 30
 
 
 logging.basicConfig(level=logging.INFO)
@@ -138,6 +140,32 @@ async def add_admin(message: types.Message, command: CommandObject):
         await db.commit()
 
     await message.answer(f'+, {new_admin_id} now admin')
+
+
+
+@dp.message(Command('captcha_delay'))
+async def set_captcha_delay(message: types.Message, command: CommandObject):
+    global CAPTCHA_DELAY
+    admins = await get_admins()
+    if message.from_user.id not in admins:
+        return
+
+    if not command.args:
+        await message.answer(f'usage: /captcha_delay <min>\ncurrent: {CAPTCHA_DELAY // 60} min')
+        return
+
+    try:
+        minutes = float(command.args.strip())
+    except ValueError:
+        await message.answer('минуты должны быть числом')
+        return
+
+    if minutes <= 0 or minutes >= 300:
+        await message.answer('минуты должны быть больше 0 и меньше 300')
+        return
+
+    CAPTCHA_DELAY = int(minutes * 60)
+    await message.answer(f'+, теперь на капчу даётся {minutes} мин')
 
 
 
@@ -342,6 +370,7 @@ async def red_document(message: types.Message, state: FSMContext):
 @dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
 async def user_joined(event: types.ChatMemberUpdated, bot: Bot):
     new_user = event.new_chat_member.user
+    mention = f'<a href="tg://user?id={new_user.id}">{html.escape(new_user.first_name)}</a>'
 
     added_by = event.from_user
     if added_by:
@@ -349,7 +378,8 @@ async def user_joined(event: types.ChatMemberUpdated, bot: Bot):
         if added_by.id in admins:
             await bot.send_message(
                 chat_id=event.chat.id,
-                text=f"Привет, {new_user.first_name}! Добро пожаловать в наш чат!")
+                text=f"Привет, {mention}! Добро пожаловать в наш чат!",
+                parse_mode="HTML")
             return
 
     key = StorageKey(bot_id=bot.id, chat_id=event.chat.id, user_id=new_user.id)
@@ -358,19 +388,22 @@ async def user_joined(event: types.ChatMemberUpdated, bot: Bot):
     num2 = random.randint(1,10)
     await bot.send_message(
         chat_id=event.chat.id,
-        text=f"Привет, {event.new_chat_member.user.first_name}! Добро пожаловать в наш чат!")
+        text=f"Привет, {mention}! Добро пожаловать в наш чат!",
+        parse_mode="HTML")
     await bot.send_message(
         chat_id=event.chat.id,
-        text=f"реши капчу {num1}*{num2}, на любой ответ кроме правильного тебя забанят")
+        text=f"{mention}, реши капчу {num1}*{num2}, на любой ответ кроме правильного тебя забанят",
+        parse_mode="HTML")
     await state.update_data(answer=str(num1*num2))
     await state.set_state(Capcha.one)
-    await asyncio.sleep(60)
+    await asyncio.sleep(CAPTCHA_DELAY)
 
     if await state.get_state() == Capcha.one.state:
         await bot.ban_chat_member(chat_id=event.chat.id, user_id=new_user.id)
         await state.clear()
         await bot.send_message(chat_id=event.chat.id,
-                               text=f"{new_user.first_name} не решил капчу вовремя и был забанен")
+                               text=f"{mention} не решил капчу вовремя и был забанен",
+                               parse_mode="HTML")
 
 
 
@@ -387,6 +420,7 @@ async def capcha(message: types.Message, state: FSMContext):
     else:
         await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
         await bot.ban_chat_member(chat_id=message.chat.id, user_id=user_id)
+        await state.clear()
 
 
 
