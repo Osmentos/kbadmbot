@@ -37,6 +37,10 @@ class Noteredaction(StatesGroup):
     text = State()
     document = State()
 
+class Suggestions(StatesGroup):
+    text = State()
+
+
 
 async def get_admins():
     async with aiosqlite.connect('kb_adminbot.db') as db:
@@ -96,7 +100,49 @@ async def get_note_document(num):
     return document
 
 
+async def get_suggestion_data(num):
+    async with aiosqlite.connect('kb_adminbot.db') as db:
+        cursor = await db.execute(
+            "SELECT text, document FROM Suggestions WHERE Suggestion_number =?",
+            (num, )
+        )
+        rows = await cursor.fetchall()
+    return rows
 
+
+
+async def get_next_suggestion():
+    async with aiosqlite.connect('kb_adminbot.db') as db:
+        cursor = await db.execute(
+            "SELECT Suggestion_number, Text, Document FROM Suggestions ORDER BY Suggestion_number LIMIT 1"
+        )
+        return await cursor.fetchone()
+
+async def send_next_suggestion(chat_id: int, bot: Bot):
+    row = await get_next_suggestion()
+    if row is None:
+        await bot.send_message(chat_id, "Все предложения обработаны!")
+        return
+
+    number, text, document = row
+    if document:
+        await bot.send_document(chat_id, document, caption=text)
+    else:
+        await bot.send_message(chat_id, text)
+
+    buttons = [
+        [InlineKeyboardButton(text="удалить", callback_data=f"sug_del_{number}")],
+        [InlineKeyboardButton(text="выложить", callback_data=f"sug_post_{number}")],
+        [InlineKeyboardButton(text="выйти", callback_data="sug_quit")]
+    ]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await bot.send_message(chat_id, 'действие', reply_markup=keyboard)
+
+
+async def delete_suggestion(number):
+    async with aiosqlite.connect('kb_adminbot.db') as db:
+        await db.execute("DELETE FROM Suggestions WHERE Suggestion_number = ?", (number,))
+        await db.commit()
 
 
 
@@ -105,15 +151,21 @@ async def get_note_document(num):
 async def cmd_start(message: types.Message):
     admins = await get_admins()
     if message.from_user.id in admins:
-        buttons = [
-            [InlineKeyboardButton(text="редактировать заметку", callback_data="note_edit")],
-            [InlineKeyboardButton(text="создать заметку", callback_data="note_creation")],
-            [InlineKeyboardButton(text="удалить заметку", callback_data=f"notedel")]
-            ]
-        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-        await message.answer('выберите действие', reply_markup=keyboard)
+        await message.answer('/suggestions - просмотр предложки,\n /notesadm - для создания заметок,\n /add_admin <tg_id> - добавление админа')
     else:
         await message.answer(f"Привет, {message.from_user.first_name}! Добро пожаловать!")
+
+
+@dp.message(Command('notesadm'))
+async def add_notes(message: types.Message):
+    buttons = [
+        [InlineKeyboardButton(text="редактировать заметку", callback_data="note_edit")],
+        [InlineKeyboardButton(text="создать заметку", callback_data="note_creation")],
+        [InlineKeyboardButton(text="удалить заметку", callback_data=f"notedel")]
+    ]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer('выберите действие', reply_markup=keyboard)
+
 
 
 
@@ -206,7 +258,7 @@ async def add_notes_final(message: types.Message, state: FSMContext):
 async def command_edit_notes(callback: types.CallbackQuery):
     notes = await get_notes_titles_and_numbers()
     if not notes:
-        callback.message.edit_text("Удалять пока что нечего")
+        await callback.message.edit_text("Удалять пока что нечего")
         return
     
     buttons = []
@@ -442,9 +494,64 @@ async def command_view1(callback: types.CallbackQuery, state: FSMContext):
         await bot.send_message(callback.message.chat.id, f'{title}\n\n{text}')
 
 
+@dp.message(Command('suggest'))
+async def add_suggestion(message: types.Message, state: FSMContext):
+    await message.answer('Напишите пост/идею для обьявлений в чате, сообщение будет проверено админами')
+    await state.set_state(Suggestions.text)
 
 
 
+
+@dp.message(Suggestions.text)
+async def suggestions(message: types.Message, state: FSMContext):
+    documentid = message.document.file_id if message.document else None
+    async with aiosqlite.connect('kb_adminbot.db') as db:
+        await db.execute(
+            "INSERT INTO Suggestions (Text, Document) VALUES (?, ?)",
+            (message.text, documentid)
+        )
+        await db.commit()
+    await state.clear()
+
+
+
+@dp.message(Command('suggestions'))
+async def check_suggestions(message: types.Message):
+    admins = await get_admins()
+    if message.from_user.id in admins:
+        await send_next_suggestion(message.chat.id, message.bot)
+
+@dp.callback_query(F.data.startswith('sug_del_'))
+async def sug_del(callback: types.CallbackQuery):
+    number = int(callback.data.split('_')[2])
+    await callback.message.delete()
+    await delete_suggestion(number)
+    await send_next_suggestion(callback.message.chat.id, callback.bot)
+
+
+
+@dp.callback_query(F.data.startswith('sug_post_'))
+async def sug_post(callback: types.CallbackQuery):
+    number = int(callback.data.split('_')[2])
+    chat_id=-1003959995467
+    await callback.message.delete()
+    row = await get_next_suggestion()
+    if row and row[0] == number:
+        _, text, document = row
+        if document:
+            await bot.send_document(chat_id=chat_id, document=document, caption=text, message_thread_id=3)
+        else:
+            await bot.send_message(chat_id=chat_id, text=text, message_thread_id=3)
+        await delete_suggestion(number)
+
+    await send_next_suggestion(callback.message.chat.id, callback.bot)
+
+
+
+@dp.callback_query(F.data == 'sug_quit')
+async def sug_quit(callback: types.CallbackQuery):
+    await callback.message.delete()
+    await callback.message.answer('Вы вышли из режима просмотра предложки')
 
 
 
