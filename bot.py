@@ -128,18 +128,17 @@ async def send_next_suggestion(chat_id: int, bot: Bot):
         return
 
     number, text, document = row
-    if document:
-        await bot.send_document(chat_id, document, caption=text)
-    else:
-        await bot.send_message(chat_id, text)
-
     buttons = [
         [InlineKeyboardButton(text="удалить", callback_data=f"sug_del_{number}")],
         [InlineKeyboardButton(text="выложить", callback_data=f"sug_post_{number}")],
         [InlineKeyboardButton(text="выйти", callback_data="sug_quit")]
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await bot.send_message(chat_id, 'действие', reply_markup=keyboard)
+
+    if document:
+        await bot.send_document(chat_id, document, caption=text, reply_markup=keyboard)
+    else:
+        await bot.send_message(chat_id, text, reply_markup=keyboard)
 
 
 async def delete_suggestion(number):
