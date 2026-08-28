@@ -18,6 +18,7 @@ from aiogram.filters.command import Command, CommandObject
 
 
 load_dotenv()
+CAPTCHA_DELAY = 60 * 30
 
 
 logging.basicConfig(level=logging.INFO)
@@ -484,6 +485,7 @@ async def capcha(message: types.Message, state: FSMContext):
     else:
         await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
         await bot.ban_chat_member(chat_id=message.chat.id, user_id=user_id)
+        await state.clear()
 
 
 
