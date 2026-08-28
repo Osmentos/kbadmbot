@@ -1,4 +1,5 @@
 import asyncio
+import html
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.filters import CommandStart, ChatMemberUpdatedFilter
@@ -20,6 +21,8 @@ load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+SUGGESTIONS_CHAT_ID = int(os.getenv("SUGGESTIONS_CHAT_ID"))
+SUGGESTIONS_THREAD_ID = int(os.getenv("SUGGESTIONS_THREAD_ID"))
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
@@ -151,7 +154,7 @@ async def delete_suggestion(number):
 async def cmd_start(message: types.Message):
     admins = await get_admins()
     if message.from_user.id in admins:
-        await message.answer('/suggestions - просмотр предложки,\n /notesadm - для создания заметок,\n /add_admin <tg_id> - добавление админа')
+        await message.answer('/suggestions - просмотр предложки,\n /notesadm - для создания заметок,\n /add_admin <tg_id> - добавление админа,\n /captcha_delay <min> - время на решение капчи')
     else:
         await message.answer(f"Привет, {message.from_user.first_name}! Добро пожаловать!")
 
@@ -190,6 +193,32 @@ async def add_admin(message: types.Message, command: CommandObject):
         await db.commit()
 
     await message.answer(f'+, {new_admin_id} now admin')
+
+
+
+@dp.message(Command('captcha_delay'))
+async def set_captcha_delay(message: types.Message, command: CommandObject):
+    global CAPTCHA_DELAY
+    admins = await get_admins()
+    if message.from_user.id not in admins:
+        return
+
+    if not command.args:
+        await message.answer(f'usage: /captcha_delay <min>\ncurrent: {CAPTCHA_DELAY // 60} min')
+        return
+
+    try:
+        minutes = float(command.args.strip())
+    except ValueError:
+        await message.answer('минуты должны быть числом')
+        return
+
+    if minutes <= 0 or minutes >= 300:
+        await message.answer('минуты должны быть больше 0 и меньше 300')
+        return
+
+    CAPTCHA_DELAY = int(minutes * 60)
+    await message.answer(f'+, теперь на капчу даётся {minutes} мин')
 
 
 
@@ -394,6 +423,7 @@ async def red_document(message: types.Message, state: FSMContext):
 @dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
 async def user_joined(event: types.ChatMemberUpdated, bot: Bot):
     new_user = event.new_chat_member.user
+    mention = f'<a href="tg://user?id={new_user.id}">{html.escape(new_user.first_name)}</a>'
 
     added_by = event.from_user
     if added_by:
@@ -401,7 +431,8 @@ async def user_joined(event: types.ChatMemberUpdated, bot: Bot):
         if added_by.id in admins:
             await bot.send_message(
                 chat_id=event.chat.id,
-                text=f"Привет, {new_user.first_name}! Добро пожаловать в наш чат!")
+                text=f"Привет, {mention}! Добро пожаловать в наш чат!",
+                parse_mode="HTML")
             return
 
     key = StorageKey(bot_id=bot.id, chat_id=event.chat.id, user_id=new_user.id)
@@ -410,19 +441,22 @@ async def user_joined(event: types.ChatMemberUpdated, bot: Bot):
     num2 = random.randint(1,10)
     await bot.send_message(
         chat_id=event.chat.id,
-        text=f"Привет, {event.new_chat_member.user.first_name}! Добро пожаловать в наш чат!")
+        text=f"Привет, {mention}! Добро пожаловать в наш чат!",
+        parse_mode="HTML")
     await bot.send_message(
         chat_id=event.chat.id,
-        text=f"реши капчу {num1}*{num2}, на любой ответ кроме правильного тебя забанят")
+        text=f"{mention}, реши капчу {num1}*{num2}, на любой ответ кроме правильного тебя забанят",
+        parse_mode="HTML")
     await state.update_data(answer=str(num1*num2))
     await state.set_state(Capcha.one)
-    await asyncio.sleep(60)
+    await asyncio.sleep(CAPTCHA_DELAY)
 
     if await state.get_state() == Capcha.one.state:
         await bot.ban_chat_member(chat_id=event.chat.id, user_id=new_user.id)
         await state.clear()
         await bot.send_message(chat_id=event.chat.id,
-                               text=f"{new_user.first_name} не решил капчу вовремя и был забанен")
+                               text=f"{mention} не решил капчу вовремя и был забанен",
+                               parse_mode="HTML")
 
 
 
@@ -512,6 +546,7 @@ async def suggestions(message: types.Message, state: FSMContext):
         )
         await db.commit()
     await state.clear()
+    await message.answer('предложение отправлено на модерацию, спасибо!')
 
 
 
@@ -533,15 +568,14 @@ async def sug_del(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith('sug_post_'))
 async def sug_post(callback: types.CallbackQuery):
     number = int(callback.data.split('_')[2])
-    chat_id=-1003959995467
     await callback.message.delete()
     row = await get_next_suggestion()
     if row and row[0] == number:
         _, text, document = row
         if document:
-            await bot.send_document(chat_id=chat_id, document=document, caption=text, message_thread_id=3)
+            await bot.send_document(chat_id=SUGGESTIONS_CHAT_ID, document=document, caption=text, message_thread_id=SUGGESTIONS_THREAD_ID)
         else:
-            await bot.send_message(chat_id=chat_id, text=text, message_thread_id=3)
+            await bot.send_message(chat_id=SUGGESTIONS_CHAT_ID, text=text, message_thread_id=SUGGESTIONS_THREAD_ID)
         await delete_suggestion(number)
 
     await send_next_suggestion(callback.message.chat.id, callback.bot)
