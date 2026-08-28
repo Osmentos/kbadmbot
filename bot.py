@@ -1,6 +1,7 @@
 import asyncio
 import html
 from aiogram import Bot, Dispatcher, types, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.filters import CommandStart, ChatMemberUpdatedFilter
 from aiogram.filters.chat_member_updated import JOIN_TRANSITION
@@ -128,6 +129,12 @@ async def send_next_suggestion(chat_id: int, bot: Bot):
         return
 
     number, text, document = row
+
+    if not text and not document:
+        await delete_suggestion(number)
+        await send_next_suggestion(chat_id, bot)
+        return
+
     buttons = [
         [InlineKeyboardButton(text="удалить", callback_data=f"sug_del_{number}")],
         [InlineKeyboardButton(text="выложить", callback_data=f"sug_post_{number}")],
@@ -135,8 +142,13 @@ async def send_next_suggestion(chat_id: int, bot: Bot):
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
+    # костыль , так как телеграмм отдает Telegram server says - Bad Request: can't use file of type Photo as Document
+    # так как фото, присланное как фото и фото, присланное как Document - разное
     if document:
-        await bot.send_document(chat_id, document, caption=text, reply_markup=keyboard)
+        try:
+            await bot.send_document(chat_id, document, caption=text, reply_markup=keyboard)
+        except TelegramBadRequest:
+            await bot.send_photo(chat_id, document, caption=text, reply_markup=keyboard)
     else:
         await bot.send_message(chat_id, text, reply_markup=keyboard)
 
@@ -537,11 +549,23 @@ async def add_suggestion(message: types.Message, state: FSMContext):
 
 @dp.message(Suggestions.text)
 async def suggestions(message: types.Message, state: FSMContext):
-    documentid = message.document.file_id if message.document else None
+    if message.document:
+        documentid = message.document.file_id
+    elif message.photo:
+        documentid = message.photo[-1].file_id
+    else:
+        documentid = None
+
+    text = message.text or message.caption
+
+    if not text and not documentid:
+        await message.answer('не получилось прочитать сообщение, пришли текстом или файлом/фото с подписью')
+        return
+
     async with aiosqlite.connect('kb_adminbot.db') as db:
         await db.execute(
             "INSERT INTO Suggestions (Text, Document) VALUES (?, ?)",
-            (message.text, documentid)
+            (text, documentid)
         )
         await db.commit()
     await state.clear()
@@ -572,7 +596,10 @@ async def sug_post(callback: types.CallbackQuery):
     if row and row[0] == number:
         _, text, document = row
         if document:
-            await bot.send_document(chat_id=SUGGESTIONS_CHAT_ID, document=document, caption=text, message_thread_id=SUGGESTIONS_THREAD_ID)
+            try:
+                await bot.send_document(chat_id=SUGGESTIONS_CHAT_ID, document=document, caption=text, message_thread_id=SUGGESTIONS_THREAD_ID)
+            except TelegramBadRequest:
+                await bot.send_photo(chat_id=SUGGESTIONS_CHAT_ID, photo=document, caption=text, message_thread_id=SUGGESTIONS_THREAD_ID)
         else:
             await bot.send_message(chat_id=SUGGESTIONS_CHAT_ID, text=text, message_thread_id=SUGGESTIONS_THREAD_ID)
         await delete_suggestion(number)
