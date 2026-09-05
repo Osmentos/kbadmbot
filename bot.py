@@ -372,18 +372,20 @@ async def user_joined(event: types.ChatMemberUpdated, bot: Bot):
     new_user = event.new_chat_member.user
     mention = f'<a href="tg://user?id={new_user.id}">{html.escape(new_user.first_name)}</a>'
 
+    key = StorageKey(bot_id=bot.id, chat_id=event.chat.id, user_id=new_user.id)
+    state = FSMContext(storage=dp.storage, key=key)
+
     added_by = event.from_user
     if added_by:
         admins = await get_admins()
         if added_by.id in admins:
+            await state.clear()
             await bot.send_message(
                 chat_id=event.chat.id,
                 text=f"Привет, {mention}! Добро пожаловать в наш чат!",
                 parse_mode="HTML")
             return
 
-    key = StorageKey(bot_id=bot.id, chat_id=event.chat.id, user_id=new_user.id)
-    state = FSMContext(storage=dp.storage, key=key)
     num1 = random.randint(1,10)
     num2 = random.randint(1,10)
     await bot.send_message(
@@ -399,11 +401,13 @@ async def user_joined(event: types.ChatMemberUpdated, bot: Bot):
     await asyncio.sleep(CAPTCHA_DELAY)
 
     if await state.get_state() == Capcha.one.state:
-        await bot.ban_chat_member(chat_id=event.chat.id, user_id=new_user.id)
-        await state.clear()
-        await bot.send_message(chat_id=event.chat.id,
-                               text=f"{mention} не решил капчу вовремя и был забанен",
-                               parse_mode="HTML")
+        try:
+            await bot.ban_chat_member(chat_id=event.chat.id, user_id=new_user.id)
+            await bot.send_message(chat_id=event.chat.id,
+                                   text=f"{mention} не решил капчу вовремя и был забанен",
+                                   parse_mode="HTML")
+        finally:
+            await state.clear()
 
 
 
