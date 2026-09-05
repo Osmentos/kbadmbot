@@ -27,6 +27,15 @@ async def create_database(db_path: str = DB_PATH) -> None:
                 """)
 
 
+        await db.execute("""
+                    CREATE TABLE IF NOT EXISTS Suggestions (
+                    Suggestion_number INTEGER PRIMARY KEY AUTOINCREMENT,
+                    Text TEXT,
+                    Document TEXT
+                    );
+        """)
+
+
         await db.commit()
 
 
