@@ -13,6 +13,8 @@ import random
 import logging
 import aiosqlite
 from db_creation import create_database
+from ludka_database import ludka_init
+from ludka_handlers import router as ludka_router
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.filters.command import Command, CommandObject
 
@@ -672,6 +674,8 @@ async def sug_quit(callback: types.CallbackQuery):
 
 async def main():
     await create_database()
+    await ludka_init()
+    dp.include_router(ludka_router)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
