@@ -1,7 +1,7 @@
 import asyncio
 import html
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.filters import CommandStart, ChatMemberUpdatedFilter
 from aiogram.filters.chat_member_updated import JOIN_TRANSITION
@@ -432,79 +432,110 @@ async def red_document(message: types.Message, state: FSMContext):
 
 
 #капча
+def user_mention(user: types.User) -> str:
+    return f'<a href="tg://user?id={user.id}">{html.escape(user.first_name)}</a>'
+
+
+def captcha_msg_ids(data: dict) -> list[int]:
+    ids = [data.get('welcome_msg_id'), data.get('question_msg_id')]
+    return [i for i in ids if i]
+
+
+async def delete_messages(bot: Bot, chat_id: int, message_ids: list[int]):
+    message_ids = [i for i in message_ids if i]
+    if not message_ids:
+        return
+    try:
+        await bot.delete_messages(chat_id=chat_id, message_ids=message_ids)
+    except TelegramAPIError as e:
+        logging.warning(f"капча: не удалось удалить сообщения {message_ids} в чате {chat_id}: {e}")
+
+
 @dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
 async def user_joined(event: types.ChatMemberUpdated, bot: Bot):
     new_user = event.new_chat_member.user
-    mention = f'<a href="tg://user?id={new_user.id}">{html.escape(new_user.first_name)}</a>'
+    mention = user_mention(new_user)
+    chat_id = event.chat.id
+
+    key = StorageKey(bot_id=bot.id, chat_id=chat_id, user_id=new_user.id)
+    state = FSMContext(storage=dp.storage, key=key)
 
     added_by = event.from_user
     if added_by:
         admins = await get_admins()
         if added_by.id in admins:
+            await state.clear()
             await bot.send_message(
-                chat_id=event.chat.id,
+                chat_id=chat_id,
                 text=f"Привет, {mention}! Добро пожаловать в наш чат!",
                 parse_mode="HTML")
             return
 
-    key = StorageKey(bot_id=bot.id, chat_id=event.chat.id, user_id=new_user.id)
-    state = FSMContext(storage=dp.storage, key=key)
     num1 = random.randint(1,10)
     num2 = random.randint(1,10)
-    msg1 = await bot.send_message(
-        chat_id=event.chat.id,
+    welcome = await bot.send_message(
+        chat_id=chat_id,
         text=f"Привет, {mention}! Добро пожаловать в наш чат!",
         parse_mode="HTML")
-    msg2 = await bot.send_message(
-        chat_id=event.chat.id,
-        text=f"{mention}, реши капчу {num1}*{num2}, на любой ответ кроме правильного тебя забанят",
+    question = await bot.send_message(
+        chat_id=chat_id,
+        text=f"{mention}, реши капчу {num1}*{num2}. У тебя две попытки, потом бан",
         parse_mode="HTML")
-    await state.update_data(answer=str(num1*num2), msg_ids_to_delete=[msg1.message_id, msg2.message_id])
+    
+    await state.update_data(answer=str(num1*num2),
+                            captcha_expr=f"{num1}*{num2}",
+                            attempts_left=2,
+                            welcome_msg_id=welcome.message_id,
+                            question_msg_id=question.message_id)
     await state.set_state(Capcha.one)
     await asyncio.sleep(CAPTCHA_DELAY)
 
     if await state.get_state() == Capcha.one.state:
-        await bot.ban_chat_member(chat_id=event.chat.id, user_id=new_user.id)
-        await state.clear()
+        data = await state.get_data()
         try:
-            await event.bot.delete_message(
-                chat_id=event.chat.id, message_id=msg1.message_id
-            )
-            await event.bot.delete_message(
-                chat_id=event.chat.id, message_id=msg2.message_id
-            )
-        except TelegramBadRequest:
-            pass
-        await bot.send_message(chat_id=event.chat.id,
-                               text=f"{mention} не решил капчу вовремя и был забанен",
-                               parse_mode="HTML")
-
-
+            await bot.ban_chat_member(chat_id=chat_id, user_id=new_user.id)
+            member = await bot.get_chat_member(chat_id=chat_id, user_id=new_user.id)
+            logging.info(f"debug: user_id={new_user.id} после бана статус в чате = {member.status}")
+            await bot.send_message(chat_id=chat_id,
+                                   text=f"{mention} не решил капчу вовремя и был забанен",
+                                   parse_mode="HTML")
+        except TelegramAPIError as e:
+            logging.warning(f"debug: user_id={new_user.id} не удалось забанить/уведомить по таймауту: {e}")
+        finally:
+            await state.clear()
+            await delete_messages(bot, chat_id, captcha_msg_ids(data))
 
 
 @dp.message(Capcha.one)
 async def capcha(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    user_id = message.from_user.id
     user = message.from_user
-    full_name = user.full_name
-    answer = data['answer']
-    msg_to_del = data.get('msg_ids_to_delete', [])
-    if message.text == answer:
-        await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
-        await message.answer(f'{full_name}, красава, добро пожаловать')
+    chat_id = message.chat.id
+    bot = message.bot
+
+    if message.text == data['answer']:
         await state.clear()
-    else:
-        await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
-        await bot.ban_chat_member(chat_id=message.chat.id, user_id=user_id)
+        await delete_messages(bot, chat_id, captcha_msg_ids(data) + [message.message_id])
+        await message.answer(f'{user.full_name}, красава, добро пожаловать')
+        return
+
+    attempts_left = data.get('attempts_left', 1) - 1
+    if attempts_left > 0:
+        await state.update_data(attempts_left=attempts_left)
+        retry = await message.answer(
+            f"{user_mention(user)} Неверно! Осталась одна попытка на решение капчи. Капча: {data['captcha_expr']}",
+            parse_mode="HTML")
+        await state.update_data(question_msg_id=retry.message_id)
+        await delete_messages(bot, chat_id, [data.get('question_msg_id'), message.message_id])
+        return
+
+    try:
+        await bot.ban_chat_member(chat_id=chat_id, user_id=user.id)
+    except TelegramAPIError as e:
+        logging.warning(f"капча: user_id={user.id} не удалось забанить после неверного ответа: {e}")
+    finally:
         await state.clear()
-    for msg in msg_to_del:
-        try:
-            await message.bot.delete_message(
-                chat_id=message.chat.id, message_id=msg
-            )
-        except TelegramBadRequest:
-            pass
+        await delete_messages(bot, chat_id, captcha_msg_ids(data) + [message.message_id])
 
 
 
