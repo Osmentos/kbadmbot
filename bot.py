@@ -460,6 +460,9 @@ async def user_joined(event: types.ChatMemberUpdated, bot: Bot):
     key = StorageKey(bot_id=bot.id, chat_id=chat_id, user_id=new_user.id)
     state = FSMContext(storage=dp.storage, key=key)
 
+    key = StorageKey(bot_id=bot.id, chat_id=event.chat.id, user_id=new_user.id)
+    state = FSMContext(storage=dp.storage, key=key)
+
     added_by = event.from_user
     if added_by:
         admins = await get_admins()
