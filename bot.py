@@ -451,21 +451,30 @@ async def user_joined(event: types.ChatMemberUpdated, bot: Bot):
     state = FSMContext(storage=dp.storage, key=key)
     num1 = random.randint(1,10)
     num2 = random.randint(1,10)
-    await bot.send_message(
+    msg1 = await bot.send_message(
         chat_id=event.chat.id,
         text=f"Привет, {mention}! Добро пожаловать в наш чат!",
         parse_mode="HTML")
-    await bot.send_message(
+    msg2 = await bot.send_message(
         chat_id=event.chat.id,
         text=f"{mention}, реши капчу {num1}*{num2}, на любой ответ кроме правильного тебя забанят",
         parse_mode="HTML")
-    await state.update_data(answer=str(num1*num2))
+    await state.update_data(answer=str(num1*num2), msg_ids_to_delete=[msg1.message_id, msg2.message_id])
     await state.set_state(Capcha.one)
     await asyncio.sleep(CAPTCHA_DELAY)
 
     if await state.get_state() == Capcha.one.state:
         await bot.ban_chat_member(chat_id=event.chat.id, user_id=new_user.id)
         await state.clear()
+        try:
+            await event.bot.delete_message(
+                chat_id=event.chat.id, message_id=msg1.message_id
+            )
+            await event.bot.delete_message(
+                chat_id=event.chat.id, message_id=msg2.message_id
+            )
+        except TelegramBadRequest:
+            pass
         await bot.send_message(chat_id=event.chat.id,
                                text=f"{mention} не решил капчу вовремя и был забанен",
                                parse_mode="HTML")
@@ -477,15 +486,25 @@ async def user_joined(event: types.ChatMemberUpdated, bot: Bot):
 async def capcha(message: types.Message, state: FSMContext):
     data = await state.get_data()
     user_id = message.from_user.id
+    user = message.from_user
+    full_name = user.full_name
     answer = data['answer']
+    msg_to_del = data.get('msg_ids_to_delete', [])
     if message.text == answer:
         await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
-        await message.answer('красава, добро пожаловать')
+        await message.answer(f'{full_name}, красава, добро пожаловать')
         await state.clear()
     else:
         await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
         await bot.ban_chat_member(chat_id=message.chat.id, user_id=user_id)
         await state.clear()
+    for msg in msg_to_del:
+        try:
+            await message.bot.delete_message(
+                chat_id=message.chat.id, message_id=msg
+            )
+        except TelegramBadRequest:
+            pass
 
 
 
